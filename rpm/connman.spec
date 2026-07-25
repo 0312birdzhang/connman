@@ -177,6 +177,14 @@ Requires:   libmnl
 %description plugin-vpn-wireguard
 This package provides Wireguard VPN plugin for connman.
 
+%package plugin-vpn-xray
+Summary:    Connection Manager Xray VPN plugin
+Requires:   %{name} = %{version}-%{release}
+Requires:   %{name}-vpn-scripts
+
+%description plugin-vpn-xray
+This package provides Xray VPN plugin for connman.
+
 %prep
 %setup -q -n %{name}-%{version}/connman
 
@@ -193,6 +201,7 @@ This package provides Wireguard VPN plugin for connman.
     --enable-pptp \
     --enable-openfortivpn \
     --enable-wireguard \
+    --enable-xray \
     --enable-loopback=builtin \
     --enable-pacrunner=builtin \
     --enable-sailfish-vpn-access=builtin \
@@ -357,4 +366,8 @@ systemctl daemon-reload || :
 %files plugin-vpn-wireguard
 %license COPYING
 %{_libdir}/%{name}/plugins-vpn/wireguard.so
+
+%files plugin-vpn-xray
+%license COPYING
+%{_libdir}/%{name}/plugins-vpn/xray.so
 

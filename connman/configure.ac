@@ -172,6 +172,24 @@ fi
 AM_CONDITIONAL(OPENVPN, test "${enable_openvpn}" != "no")
 AM_CONDITIONAL(OPENVPN_BUILTIN, test "${enable_openvpn}" = "builtin")
 
+AC_ARG_WITH(xray, AC_HELP_STRING([--with-xray=PROGRAM],
+	[specify location of xray binary]), [path_xray=${withval}])
+
+AC_ARG_ENABLE(xray,
+	AC_HELP_STRING([--enable-xray], [enable Xray VPN support]),
+		[enable_xray=${enableval}], [enable_xray="no"])
+if (test "${enable_xray}" != "no"); then
+	if (test -z "${path_xray}"); then
+		AC_PATH_PROG(XRAY, [xray], [/usr/bin/xray],
+				$PATH:/sbin:/usr/sbin)
+	else
+		XRAY="${path_xray}"
+		AC_SUBST(XRAY)
+	fi
+fi
+AM_CONDITIONAL(XRAY, test "${enable_xray}" != "no")
+AM_CONDITIONAL(XRAY_BUILTIN, test "${enable_xray}" = "builtin")
+
 AC_ARG_WITH(vpnc, AC_HELP_STRING([--with-vpnc=PROGRAM],
 	[specify location of vpnc binary]), [path_vpnc=${withval}])
 

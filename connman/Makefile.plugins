@@ -130,6 +130,23 @@ vpn_plugins_wireguard_la_LIBADD = @LIBMNL_LIBS@
 endif
 endif
 
+if XRAY
+builtin_vpn_source = vpn/plugins/vpn.c vpn/plugins/vpn.h
+if XRAY_BUILTIN
+builtin_vpn_modules += xray
+builtin_vpn_sources += vpn/plugins/xray.c
+builtin_vpn_cflags += -DXRAY=\"@XRAY@\" \
+			-DVPN_STATEDIR=\""$(vpn_statedir)"\"
+else
+vpn_plugin_LTLIBRARIES += vpn/plugins/xray.la
+vpn_plugin_objects += $(plugins_xray_la_OBJECTS)
+vpn_plugins_xray_la_SOURCES = vpn/plugins/xray.c
+vpn_plugins_xray_la_CFLAGS = $(plugin_cflags) -DXRAY=\"@XRAY@\" \
+			-DVPN_STATEDIR=\""$(vpn_statedir)"\"
+vpn_plugins_xray_la_LDFLAGS = $(plugin_ldflags)
+endif
+endif
+
 if OPENCONNECT
 builtin_vpn_source = vpn/plugins/vpn.c vpn/plugins/vpn.h
 if OPENCONNECT_BUILTIN
