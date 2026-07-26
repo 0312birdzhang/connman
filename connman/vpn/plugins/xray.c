@@ -93,15 +93,31 @@ struct {
 	{"Xray.Encryption",       true},
 	{"Xray.Flow",             true},
 	{"Xray.Network",          true},
+	{"Xray.HeaderType",       true},
 	{"Xray.Security",         true},
 	{"Xray.SNI",              true},
 	{"Xray.ALPN",             true},
 	{"Xray.Fingerprint",      true},
+	{"Xray.AllowInsecure",    true},
+	{"Xray.ECHConfigList",    true},
+	{"Xray.VerifyPeerCert",   true},
+	{"Xray.PinnedCA256",      true},
 	{"Xray.PublicKey",        true},
 	{"Xray.ShortID",          true},
+	{"Xray.SpiderX",          true},
+	{"Xray.MLDSA65Verify",    true},
 	{"Xray.WSPath",           true},
 	{"Xray.WSHost",           true},
 	{"Xray.GRPCServiceName",  true},
+	{"Xray.GRPCMode",         true},
+	{"Xray.GRPCAuthority",    true},
+	{"Xray.Host",             true},
+	{"Xray.Path",             true},
+	{"Xray.KCPMtu",           true},
+	{"Xray.KCPTti",           true},
+	{"Xray.KCPSeed",          true},
+	{"Xray.XHTTPMode",        true},
+	{"Xray.XHTTPExtra",       true},
 	{"Xray.AssetDir",         true},
 	{"Xray.LogLevel",         true},
 };
@@ -173,13 +189,13 @@ static char *json_escape(const char *s)
 static void append_kv_string(GString *g, const char *key, const char *val)
 {
 	char *esc = json_escape(val ? val : "");
-	g_string_append_printf(g, "\"%s\": %s", key, esc);
+	g_string_append_printf(g, "%s: %s", key, esc);
 	g_free(esc);
 }
 
 static void append_kv_uint(GString *g, const char *key, unsigned int val)
 {
-	g_string_append_printf(g, "\"%s\": %u", key, val);
+	g_string_append_printf(g, "%s: %u", key, val);
 }
 
 static void append_json_string_item(GString *g, const char *val, bool first)
@@ -187,6 +203,13 @@ static void append_json_string_item(GString *g, const char *val, bool first)
 	char *esc = json_escape(val ? val : "");
 	if (!first)
 		g_string_append_c(g, ',');
+	g_string_append(g, esc);
+	g_free(esc);
+}
+
+static void append_json_escaped(GString *g, const char *s)
+{
+	char *esc = json_escape(s ? s : "");
 	g_string_append(g, esc);
 	g_free(esc);
 }
@@ -275,6 +298,38 @@ static int resolve_host(const char *host, char *out, int out_len)
 
 /* ---- config.json generation ------------------------------------------ */
 
+/* ── JSON helpers: comma-prefixed key-value (for keys after the first) ── */
+static void append_kv_comma(GString *g, const char *key, const char *val)
+{
+	g_string_append_c(g, ',');
+	g_string_append_c(g, '\n');
+	append_kv_string(g, key, val);
+}
+
+static void append_ku_comma(GString *g, const char *key, unsigned int val)
+{
+	g_string_append_c(g, ',');
+	g_string_append_c(g, '\n');
+	append_kv_uint(g, key, val);
+}
+
+static void append_str_array(GString *g, const char *prefix,
+				const char *comma_sep)
+{
+	char **items = g_strsplit_set(comma_sep, ", ", -1);
+	bool first = true;
+	g_string_append(g, prefix);
+	g_string_append(g, "[");
+	for (unsigned int i = 0; items[i]; i++) {
+		if (!*items[i])
+			continue;
+		append_json_string_item(g, items[i], first);
+		first = false;
+	}
+	g_strfreev(items);
+	g_string_append(g, "]");
+}
+
 static void append_stream_settings(GString *g, struct vpn_provider *provider)
 {
 	const char *network = vpn_provider_get_string(provider, "Xray.Network");
@@ -282,93 +337,106 @@ static void append_stream_settings(GString *g, struct vpn_provider *provider)
 	const char *sni = vpn_provider_get_string(provider, "Xray.SNI");
 	const char *alpn = vpn_provider_get_string(provider, "Xray.ALPN");
 	const char *fpr = vpn_provider_get_string(provider, "Xray.Fingerprint");
+	const char *allow_insecure = vpn_provider_get_string(provider,
+						"Xray.AllowInsecure");
+	const char *ech = vpn_provider_get_string(provider,
+						"Xray.ECHConfigList");
+	const char *vcn = vpn_provider_get_string(provider,
+						"Xray.VerifyPeerCert");
+	const char *pcs = vpn_provider_get_string(provider, "Xray.PinnedCA256");
+	const char *pubkey = vpn_provider_get_string(provider,
+						"Xray.PublicKey");
+	const char *sid = vpn_provider_get_string(provider, "Xray.ShortID");
+	const char *spx = vpn_provider_get_string(provider, "Xray.SpiderX");
+	const char *pqv = vpn_provider_get_string(provider,
+						"Xray.MLDSA65Verify");
+	const char *header_type = vpn_provider_get_string(provider,
+						"Xray.HeaderType");
+	const char *host = vpn_provider_get_string(provider, "Xray.Host");
+	const char *path = vpn_provider_get_string(provider, "Xray.Path");
 	const char *wspath = vpn_provider_get_string(provider, "Xray.WSPath");
 	const char *wshost = vpn_provider_get_string(provider, "Xray.WSHost");
-	const char *grpc = vpn_provider_get_string(provider,
-							"Xray.GRPCServiceName");
-	const char *pubkey = vpn_provider_get_string(provider, "Xray.PublicKey");
-	const char *sid = vpn_provider_get_string(provider, "Xray.ShortID");
+	const char *grpc_svc = vpn_provider_get_string(provider,
+						"Xray.GRPCServiceName");
+	const char *grpc_mode = vpn_provider_get_string(provider,
+						"Xray.GRPCMode");
+	const char *grpc_auth = vpn_provider_get_string(provider,
+						"Xray.GRPCAuthority");
+	const char *kcp_mtu = vpn_provider_get_string(provider, "Xray.KCPMtu");
+	const char *kcp_tti = vpn_provider_get_string(provider, "Xray.KCPTti");
+	const char *kcp_seed = vpn_provider_get_string(provider,
+						"Xray.KCPSeed");
+	const char *xhttp_mode = vpn_provider_get_string(provider,
+						"Xray.XHTTPMode");
+	const char *xhttp_extra = vpn_provider_get_string(provider,
+						"Xray.XHTTPExtra");
 
 	if (!network)
 		network = "tcp";
 	if (!security)
-		security = "tls";
+		security = "none";
 
 	g_string_append(g, "      \"streamSettings\": {\n");
 	append_kv_string(g, "        \"network\"", network);
-	g_string_append_c(g, ',');
-	g_string_append_c(g, '\n');
-	append_kv_string(g, "        \"security\"", security);
-	g_string_append_c(g, '\n');
 
-	if (g_str_equal(security, "tls")) {
-		g_string_append(g, "        ,\"tlsSettings\": {\n");
-		if (sni) {
-			append_kv_string(g, "          \"serverName\"", sni);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		if (alpn) {
-			g_string_append(g, "          \"alpn\": [");
-			char **items = g_strsplit_set(alpn, ", ", -1);
-			bool first = true;
-			for (unsigned int i = 0; items[i]; i++) {
-				if (!*items[i])
-					continue;
-				append_json_string_item(g, items[i], first);
-				first = false;
-			}
-			g_strfreev(items);
-			g_string_append(g, "],\n");
-		}
-		if (fpr) {
-			append_kv_string(g, "          \"fingerprint\"", fpr);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		g_string_append(g, "          \"allowInsecure\": false\n");
-		g_string_append(g, "        }\n");
-	} else if (g_str_equal(security, "reality")) {
-		g_string_append(g, "        ,\"realitySettings\": {\n");
-		if (sni) {
-			append_kv_string(g, "          \"serverName\"", sni);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		if (pubkey) {
-			append_kv_string(g, "          \"publicKey\"", pubkey);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		if (sid) {
-			append_kv_string(g, "          \"shortId\"", sid);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		if (fpr) {
-			append_kv_string(g, "          \"fingerprint\"", fpr);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
-		}
-		g_string_append(g, "          \"show\": false\n");
-		g_string_append(g, "        }\n");
-	} else {
-		/* security = "none": no security-specific block. */
-	}
+	unsigned int mtu_val, tti_val;
 
+	/* ---- per-transport settings ---- */
 	if (g_str_equal(network, "tcp")) {
-		g_string_append(g, "        ,\"tcpSettings\": { \"header\": { \"type\": \"none\" } }\n");
-	} else if (g_str_equal(network, "ws")) {
-		g_string_append(g, "        ,\"wsSettings\": {\n");
-		if (wspath) {
-			append_kv_string(g, "          \"path\"", wspath);
-			g_string_append_c(g, ',');
-			g_string_append_c(g, '\n');
+		if (header_type && g_str_equal(header_type, "http")) {
+			append_kv_comma(g, "        \"security\"", security);
+			g_string_append(g, "        ,\"tcpSettings\": {\n");
+			g_string_append(g,
+				"          \"header\": { \"type\": \"http\"");
+			if (host || (path && *path)) {
+				g_string_append(g, ", \"request\": {\n");
+				g_string_append(g,
+					"            \"version\": \"1.1\",\n"
+					"            \"method\": \"GET\",\n"
+					"            \"path\": [");
+				if (path && *path)
+					append_json_escaped(g, path);
+				else
+					g_string_append(g, "\"/\"");
+				g_string_append(g, "],\n");
+				g_string_append(g,
+					"            \"headers\": {\n"
+					"              \"Host\": [");
+				if (host && *host)
+					append_json_escaped(g, host);
+				else if (sni && *sni)
+					append_json_escaped(g, sni);
+				else
+					g_string_append(g, "\"\"");
+				g_string_append(g,
+					"],\n"
+					"              \"User-Agent\": [\"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36\"],\n"
+					"              \"Accept-Encoding\": [\"gzip, deflate\"],\n"
+					"              \"Connection\": [\"keep-alive\"]\n"
+					"            }\n"
+					"          }\n");
+			}
+			g_string_append(g, "          }\n");
+			g_string_append(g, "        }\n");
+		} else {
+			append_kv_comma(g, "        \"security\"", security);
+			g_string_append(g,
+				"        ,\"tcpSettings\": { \"header\": { \"type\": \"none\" } }\n");
 		}
-		g_string_append(g, "          \"headers\": {");
-		if (wshost) {
+	} else if (g_str_equal(network, "ws")) {
+		append_kv_comma(g, "        \"security\"", security);
+		g_string_append(g, "        ,\"wsSettings\": {\n");
+		if (wspath && *wspath) {
+			append_kv_string(g, "          \"path\"", wspath);
+			g_string_append_c(g, '\n');
+			g_string_append(g, "          ,\"headers\": {");
+		} else {
+			g_string_append(g, "          \"path\": \"/\"\n");
+			g_string_append(g, "          ,\"headers\": {");
+		}
+		if (wshost && *wshost) {
 			g_string_append(g, "\n            ");
-			append_kv_string(g, "Host", wshost);
+			append_kv_string(g, "\"Host\"", wshost);
 			g_string_append_c(g, '\n');
 			g_string_append(g, "          }\n");
 		} else {
@@ -376,13 +444,169 @@ static void append_stream_settings(GString *g, struct vpn_provider *provider)
 		}
 		g_string_append(g, "        }\n");
 	} else if (g_str_equal(network, "grpc")) {
+		append_kv_comma(g, "        \"security\"", security);
 		g_string_append(g, "        ,\"grpcSettings\": {\n");
-		if (grpc) {
-			append_kv_string(g, "          \"serviceName\"", grpc);
-			g_string_append_c(g, '\n');
-		} else {
-			g_string_append(g, "          \"serviceName\": \"\"\n");
+		g_string_append(g, "          \"serviceName\": ");
+		if (grpc_svc && *grpc_svc)
+			append_json_escaped(g, grpc_svc);
+		else
+			g_string_append(g, "\"\"");
+		g_string_append_c(g, '\n');
+		if (grpc_mode && g_str_equal(grpc_mode, "multi")) {
+			g_string_append(g, "          ,\"multiMode\": true\n");
 		}
+		if (grpc_auth && *grpc_auth) {
+			append_kv_comma(g, "          \"authority\"",
+					grpc_auth);
+			g_string_append_c(g, '\n');
+		}
+		g_string_append(g, "        }\n");
+	} else if (g_str_equal(network, "kcp")) {
+		append_kv_comma(g, "        \"security\"", security);
+		g_string_append(g, "        ,\"kcpSettings\": {\n");
+		mtu_val = (unsigned int)g_ascii_strtoull(
+				kcp_mtu ? kcp_mtu : "1350", NULL, 10);
+		append_kv_uint(g, "          \"mtu\"", mtu_val);
+		tti_val = (unsigned int)g_ascii_strtoull(
+				kcp_tti ? kcp_tti : "50", NULL, 10);
+		append_ku_comma(g, "          \"tti\"", tti_val);
+		g_string_append(g, ",\n          \"uplinkCapacity\": 100");
+		g_string_append(g, ",\n          \"downlinkCapacity\": 100");
+		g_string_append(g, ",\n          \"header\": { \"type\": ");
+		if (header_type && *header_type)
+			append_json_escaped(g, header_type);
+		else
+			g_string_append(g, "\"none\"");
+		g_string_append(g, " }");
+		if (kcp_seed && *kcp_seed) {
+			append_kv_comma(g, "          \"seed\"",
+					kcp_seed);
+		}
+		g_string_append(g, "\n        }\n");
+	} else if (g_str_equal(network, "h2")) {
+		append_kv_comma(g, "        \"security\"", security);
+		g_string_append(g, "        ,\"httpSettings\": {\n");
+		g_string_append(g, "          \"host\": [");
+		if (host && *host)
+			append_json_escaped(g, host);
+		else
+			g_string_append(g, "\"\"");
+		g_string_append(g, "],\n");
+		g_string_append(g, "          \"path\": ");
+		if (path && *path)
+			append_json_escaped(g, path);
+		else
+			g_string_append(g, "\"/\"");
+		g_string_append(g, "\n        }\n");
+	} else if (g_str_equal(network, "httpupgrade")) {
+		append_kv_comma(g, "        \"security\"", security);
+		g_string_append(g, "        ,\"httpupgradeSettings\": {\n");
+		g_string_append(g, "          \"host\": ");
+		if (host && *host)
+			append_json_escaped(g, host);
+		else
+			g_string_append(g, "\"\"");
+		g_string_append(g, ",\n");
+		g_string_append(g, "          \"path\": ");
+		if (path && *path)
+			append_json_escaped(g, path);
+		else
+			g_string_append(g, "\"/\"");
+		g_string_append(g, "\n        }\n");
+	} else if (g_str_equal(network, "xhttp")) {
+		append_kv_comma(g, "        \"security\"", security);
+		g_string_append(g, "        ,\"xhttpSettings\": {\n");
+		g_string_append(g, "          \"host\": ");
+		if (host && *host)
+			append_json_escaped(g, host);
+		else
+			g_string_append(g, "\"\"");
+		g_string_append(g, ",\n");
+		g_string_append(g, "          \"path\": ");
+		if (path && *path)
+			append_json_escaped(g, path);
+		else
+			g_string_append(g, "\"/\"");
+		if (xhttp_mode && *xhttp_mode) {
+			g_string_append(g, ",\n          \"mode\": ");
+			append_json_escaped(g, xhttp_mode);
+		}
+		if (xhttp_extra && *xhttp_extra) {
+			g_string_append(g, ",\n          \"extra\": ");
+			/* extra is a JSON object, insert raw */
+			g_string_append(g, xhttp_extra);
+		}
+		g_string_append(g, "\n        }\n");
+	} else {
+		append_kv_comma(g, "        \"security\"", security);
+	}
+
+	/* ---- per-security settings ---- */
+	if (g_str_equal(security, "tls")) {
+		g_string_append(g, "        ,\"tlsSettings\": {\n");
+		if (sni && *sni) {
+			append_kv_string(g, "          \"serverName\"", sni);
+		} else {
+			g_string_append(g, "          \"serverName\": \"\"");
+		}
+		g_string_append_c(g, '\n');
+		if (alpn && *alpn) {
+			append_str_array(g, "          ,\"alpn\": ", alpn);
+			g_string_append_c(g, '\n');
+		}
+		if (fpr && *fpr) {
+			append_kv_comma(g, "          \"fingerprint\"", fpr);
+			g_string_append_c(g, '\n');
+		}
+		if (ech && *ech) {
+			append_kv_comma(g, "          \"echConfigList\"", ech);
+			g_string_append_c(g, '\n');
+		}
+		if (vcn && *vcn) {
+			append_kv_comma(g, "          \"verifyPeerCertByName\"",
+					vcn);
+			g_string_append_c(g, '\n');
+		}
+		if (pcs && *pcs) {
+			append_kv_comma(g,
+					"          \"pinnedPeerCertificateChainSha256\"",
+					pcs);
+			g_string_append_c(g, '\n');
+		}
+		g_string_append(g, "          ,\"allowInsecure\": ");
+		g_string_append(g,
+			(allow_insecure && g_str_equal(allow_insecure, "1"))
+				? "true" : "false");
+		g_string_append(g, "\n        }\n");
+	} else if (g_str_equal(security, "reality")) {
+		g_string_append(g, "        ,\"realitySettings\": {\n");
+		if (sni && *sni) {
+			append_kv_string(g, "          \"serverName\"", sni);
+		} else {
+			g_string_append(g, "          \"serverName\": \"\"");
+		}
+		g_string_append_c(g, '\n');
+		if (pubkey && *pubkey) {
+			append_kv_comma(g, "          \"publicKey\"", pubkey);
+			g_string_append_c(g, '\n');
+		}
+		if (sid && *sid) {
+			append_kv_comma(g, "          \"shortId\"", sid);
+			g_string_append_c(g, '\n');
+		}
+		if (spx && *spx) {
+			append_kv_comma(g, "          \"spiderX\"", spx);
+			g_string_append_c(g, '\n');
+		}
+		if (pqv && *pqv) {
+			append_kv_comma(g, "          \"mldsa65Verify\"", pqv);
+			g_string_append_c(g, '\n');
+		}
+		if (fpr && *fpr) {
+			append_kv_comma(g, "          \"fingerprint\"", fpr);
+			g_string_append_c(g, '\n');
+		}
+		g_string_append(g, "          ,\"show\": false\n");
 		g_string_append(g, "        }\n");
 	}
 
@@ -406,6 +630,7 @@ static gchar *build_config_json(struct xray_info *info,
 	const char *loglevel = vpn_provider_get_string(provider, "Xray.LogLevel");
 	GString *g;
 	unsigned int port;
+	char ip_only[INET6_ADDRSTRLEN];
 
 	if (!addr || !proto || !host || !ports) {
 		connman_error("xray: missing required property");
@@ -413,6 +638,10 @@ static gchar *build_config_json(struct xray_info *info,
 	}
 
 	port = (unsigned int)g_ascii_strtoull(ports, NULL, 10);
+
+	/* Strip CIDR prefix: xray tun inbound gateway expects bare IP. */
+	if (split_cidr(addr, ip_only, sizeof(ip_only), NULL, 0, NULL) < 0)
+		g_strlcpy(ip_only, addr, sizeof(ip_only));
 
 	g = g_string_new(NULL);
 	g_string_append(g, "{\n");
@@ -431,7 +660,7 @@ static gchar *build_config_json(struct xray_info *info,
 	g_string_append_c(g, ',');
 	g_string_append_c(g, '\n');
 	g_string_append(g, "        \"gateway\": [");
-	append_json_string_item(g, addr, true);
+	append_json_string_item(g, ip_only, true);
 	g_string_append(g, "],\n");
 	append_kv_uint(g, "        \"mtu\"", 1500);
 	if (dns) {
@@ -514,6 +743,11 @@ static gchar *build_config_json(struct xray_info *info,
 		g_string_append_c(g, '\n');
 		append_kv_string(g, "            \"password\"",
 					password ? password : "");
+		if (flow && *flow) {
+			g_string_append_c(g, ',');
+			g_string_append_c(g, '\n');
+			append_kv_string(g, "            \"flow\"", flow);
+		}
 		g_string_append(g, "\n          }\n        ]\n      }\n");
 	} else if (g_str_equal(proto, "shadowsocks")) {
 		g_string_append(g, "      \"protocol\": \"shadowsocks\",\n");
