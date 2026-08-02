@@ -118,6 +118,7 @@ struct {
 	{"Xray.KCPSeed",          true},
 	{"Xray.XHTTPMode",        true},
 	{"Xray.XHTTPExtra",       true},
+	{"Xray.FinalMask",        true},
 	{"Xray.AssetDir",         true},
 	{"Xray.LogLevel",         true},
 };
@@ -370,6 +371,8 @@ static void append_stream_settings(GString *g, struct vpn_provider *provider)
 						"Xray.XHTTPMode");
 	const char *xhttp_extra = vpn_provider_get_string(provider,
 						"Xray.XHTTPExtra");
+	const char *final_mask = vpn_provider_get_string(provider,
+						"Xray.FinalMask");
 
 	if (!network)
 		network = "tcp";
@@ -608,6 +611,17 @@ static void append_stream_settings(GString *g, struct vpn_provider *provider)
 		}
 		g_string_append(g, "          ,\"show\": false\n");
 		g_string_append(g, "        }\n");
+	}
+
+	/* finalMask is a raw JSON object applied at the streamSettings level */
+	if (final_mask) {
+		while (*final_mask && g_ascii_isspace(*final_mask))
+			final_mask++;
+		if (*final_mask == '{') {
+			g_string_append(g, "        ,\"finalmask\": ");
+			g_string_append(g, final_mask);
+			g_string_append_c(g, '\n');
+		}
 	}
 
 	g_string_append(g, "      }\n");
