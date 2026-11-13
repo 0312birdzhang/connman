@@ -2158,6 +2158,7 @@ static struct connman_service *test_setup_service(void)
 
 	__connman_network_set_device(network, &wifi_device);
 	connman_network_set_name(network, "TestWiFi");
+	connman_network_set_string(network, "WiFi.Security", "psk");
 	connman_network_set_group(network, "managed_psk");
 	connman_network_set_index(network, ++index_counter);
 
@@ -2168,6 +2169,158 @@ static struct connman_service *test_setup_service(void)
 	g_assert(service->ipconfig_ipv4);
 
 	return service;
+}
+
+static void test_wifi_registry_init(void)
+{
+	test_init();
+	g_hash_table_destroy(service_hash);
+	service_hash = g_hash_table_new_full(g_str_hash, g_str_equal, NULL,
+						service_removed);
+	service_registry = g_hash_table_new_full(g_str_hash, g_str_equal,
+						g_free, NULL);
+}
+
+static void test_wifi_registry_cleanup(struct connman_network *network)
+{
+	struct connman_service *service = connman_service_lookup_from_network(network);
+
+	if (service)
+		service_set_new_service(service, true);
+	connman_network_set_group(network, NULL);
+	connman_network_unref(network);
+	connman_network_driver_unregister(&driver);
+	test_cleanup();
+	g_hash_table_destroy(service_registry);
+	service_registry = NULL;
+}
+
+static struct connman_network *test_wifi_new_network(void)
+{
+	struct connman_network *network = connman_network_create("1234567890",
+						CONNMAN_NETWORK_TYPE_WIFI);
+
+	__connman_network_set_device(network, &wifi_device);
+	connman_network_set_name(network, "TestWiFi");
+	connman_network_set_string(network, "WiFi.Security", "psk");
+	connman_network_set_index(network, ++index_counter);
+	connman_network_set_group(network, "managed_psk");
+	g_assert_true(__connman_service_create_from_network(network));
+	return network;
+}
+
+static void test_wifi_assert_no_carrier(struct connman_service *service,
+					const char *path)
+{
+	DBusMessage *message = dbus_message_new_method_call("net.connman", path,
+					CONNMAN_SERVICE_INTERFACE, "Connect");
+	DBusMessage *reply;
+
+	dbus_message_set_serial(message, 1);
+	dbus_message_set_sender(message, ":1.42");
+	reply = connect_service(connection, message, service);
+	g_assert_nonnull(reply);
+	g_assert_true(dbus_message_is_error(reply, "net.connman.Error.NoCarrier"));
+	dbus_message_unref(reply);
+	dbus_message_unref(message);
+}
+
+static void test_wifi_saved_network_reappears(void)
+{
+	struct connman_service *service;
+	struct connman_network *network, *replacement;
+	char *identifier, *path;
+
+	test_wifi_registry_init();
+	service = test_setup_service();
+	network = service->network;
+	identifier = g_strdup(service->identifier);
+	path = g_strdup(service->path);
+	service_set_new_service(service, false);
+	connman_network_set_group(network, NULL);
+	g_assert_null(service->network);
+	g_assert_true(service->ignore);
+	g_assert_true(lookup_by_identifier(identifier) == service);
+	g_assert_true(g_hash_table_lookup(service_registry, path) == service);
+	g_assert_false(service_available.value(service));
+	test_wifi_assert_no_carrier(service, path);
+
+	replacement = test_wifi_new_network();
+	g_assert_true(replacement != network);
+	connman_network_unref(network);
+	network = replacement;
+	g_assert_true(connman_service_lookup_from_network(network) == service);
+	g_assert_true(service->network == network);
+	g_assert_false(service->ignore);
+	g_assert_true(service_available.value(service));
+	g_assert_true(g_hash_table_lookup(service_registry, path) == service);
+	g_test_message("Saved network retained its service, path and availability lifecycle");
+	test_wifi_registry_cleanup(network);
+	g_free(identifier);
+	g_free(path);
+}
+
+static void test_wifi_forget_available_network(void)
+{
+	struct connman_service *service;
+	struct connman_network *network;
+	char *identifier, *path;
+
+	test_wifi_registry_init();
+	service = test_setup_service();
+	network = service->network;
+	identifier = g_strdup(service->identifier);
+	path = g_strdup(service->path);
+	service_set_new_service(service, false);
+	g_assert_true(__connman_service_remove(service));
+	g_assert_true(service->new_service);
+	g_assert_true(service->network == network);
+	g_assert_true(lookup_by_identifier(identifier) == service);
+	g_assert_true(g_hash_table_lookup(service_registry, path) == service);
+	g_test_message("Forgetting an available network retained the public service");
+	test_wifi_registry_cleanup(network);
+	g_free(identifier);
+	g_free(path);
+}
+
+static void test_wifi_unsaved_network_reappears(void)
+{
+	struct connman_service *old, *fresh, *direct;
+	struct connman_network *network, *replacement;
+	char *identifier, *path;
+
+	test_wifi_registry_init();
+	old = test_setup_service();
+	network = old->network;
+	identifier = g_strdup(old->identifier);
+	path = g_strdup(old->path);
+	service_set_new_service(old, true);
+	connman_service_ref(old);
+	connman_network_set_group(network, NULL);
+	g_assert_null(old->network);
+	g_assert_null(lookup_by_identifier(identifier));
+	replacement = test_wifi_new_network();
+	g_assert_true(replacement != network);
+	connman_network_unref(network);
+	network = replacement;
+	fresh = connman_service_lookup_from_network(network);
+	g_assert_nonnull(fresh);
+	g_assert_true(fresh != old);
+	g_assert_true(fresh->network == network);
+	direct = g_hash_table_lookup(service_registry, path);
+	g_test_message("registry=%p old=%p fresh=%p old_available=%d fresh_available=%d",
+			direct, old, fresh, service_available.value(old),
+			service_available.value(fresh));
+	if (direct == old) {
+		test_wifi_assert_no_carrier(direct, path);
+		g_test_message("Direct Connect resolved to detached old service and returned NoCarrier");
+	}
+	g_assert_true(direct == fresh);
+	connman_service_unref(old);
+	g_assert_true(g_hash_table_lookup(service_registry, path) == fresh);
+	test_wifi_registry_cleanup(network);
+	g_free(identifier);
+	g_free(path);
 }
 
 /* Only IPv4 */
@@ -2886,6 +3039,10 @@ int main(int argc, char **argv)
 
 	g_test_add_func("/service/registry_retained_reference",
 				test_service_registry_retained_reference);
+
+	g_test_add_func("/service/wifi_saved_network_reappears", test_wifi_saved_network_reappears);
+	g_test_add_func("/service/wifi_forget_available_network", test_wifi_forget_available_network);
+	g_test_add_func("/service/wifi_unsaved_network_reappears", test_wifi_unsaved_network_reappears);
 
 	ret = g_test_run();
 
